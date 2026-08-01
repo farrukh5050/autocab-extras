@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Autocab365 Extras — Settings</title>
+  <style>
+    :root { --bg:#1f2733; --text:#e8edf2; --muted:#9fb0c0; --accent:#2f8fff; }
+    body { margin:0; padding:24px; max-width:520px;
+           font:14px/1.5 system-ui, sans-serif; background:var(--bg); color:var(--text); }
+    h1 { margin:0 0 4px; font-size:18px; }
+    p.lead { margin:0 0 24px; color:var(--muted); }
+    label { display:block; margin:16px 0 6px; font-weight:600; }
+    input { width:100%; box-sizing:border-box; padding:9px 10px; border-radius:6px;
+            border:1px solid #3a4757; background:#161d27; color:var(--text); font:inherit; }
+    .hint { margin:6px 0 0; font-size:12px; color:var(--muted); }
+    .row { display:flex; gap:12px; margin-top:24px; }
+    button { padding:9px 16px; border:none; border-radius:6px; background:var(--accent);
+             color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+    button.secondary { background:#3a4757; }
+    #status { margin-top:16px; padding:12px; border-radius:6px; background:#161d27;
+              white-space:pre-wrap; font:12px/1.5 ui-monospace, monospace; display:none; }
+  </style>
+</head>
+<body>
+  <h1>Autocab365 Extras</h1>
+  <p class="lead">Driver shift data comes from the Autocab API. Your subscription key
+  is stored in this browser only, and is sent nowhere except Autocab.</p>
+
+  <label for="apiKey">Ocp-Apim-Subscription-Key</label>
+  <input id="apiKey" type="password" autocomplete="off" spellcheck="false" />
+  <p class="hint">From the Autocab API developer portal.</p>
+
+  <label for="companyId">Company ID</label>
+  <input id="companyId" type="number" min="0" />
+
+  <label for="longShiftHours">Long-shift warning (hours)</label>
+  <input id="longShiftHours" type="number" min="1" max="24" step="0.5" />
+  <p class="hint">Drivers whose total hours today exceed this are counted as "over".</p>
+
+  <div class="row">
+    <button id="save">Save</button>
+    <button id="test" class="secondary">Test connection</button>
+  </div>
+
+  <pre id="status"></pre>
+
+  <script src="options.js"></script>
+</body>
+</html>

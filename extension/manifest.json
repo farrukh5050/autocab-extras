@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Autocab365 Extras",
+  "version": "0.1.0",
+  "description": "Adds custom controls to the Autocab365 apps.",
+  "permissions": [
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://autocab-api.azure-api.net/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Autocab365 Extras"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.autocab365.com/*"
+      ],
+      "js": [
+        "core.js",
+        "features/show-booking.js",
+        "features/quick-actions.js",
+        "features/count-bookings.js",
+        "management.js",
+        "dispatch.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

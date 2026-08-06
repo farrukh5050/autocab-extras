@@ -27,6 +27,7 @@
         "features/show-booking.js",
         "features/quick-actions.js",
         "features/count-bookings.js",
+        "features/long-shifts.js",
         "management.js",
         "dispatch.js"
       ],

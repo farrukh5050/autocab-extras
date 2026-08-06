@@ -1,6 +1,7 @@
 // background.js — service worker. Fetches driver shifts from the Autocab API,
 // aggregates them per driver, and serves a small summary to the dispatch widget.
-// The API key never leaves storage, and the summary carries no driver names.
+// The API key never leaves storage. The summary names drivers, but only those
+// still on shift and past the long-shift threshold (see `longShifts`).
 "use strict";
 
 const API_URL = "https://autocab-api.azure-api.net/driver/v1/drivershifts/search";
@@ -19,20 +20,22 @@ function settings() {
   });
 }
 
-// "06:49:03", or "12:08:58.9515174" on an open shift. Hours can exceed 24, so
-// don't try to parse this as a clock time.
+// "06:49:03", "12:08:58.9515174", or "36.19:40:09.68" — .NET TimeSpan, where a
+// leading "d." appears once the span passes 24h. Missing that silently turns a
+// 37-hour shift into a 1-hour one.
 function durationToSeconds(text) {
-  const parts = String(text || "").split(":");
-  if (parts.length !== 3) return 0;
-  const [h, m, s] = parts;
-  return (+h || 0) * 3600 + (+m || 0) * 60 + Math.floor(parseFloat(s) || 0);
+  const m = String(text || "").match(/^(?:(\d+)\.)?(\d+):(\d{2}):(\d{2})/);
+  if (!m) return 0;
+  const [, d, h, mi, s] = m;
+  return (+(d || 0)) * 86400 + (+h) * 3600 + (+mi) * 60 + (+s);
 }
 
-// `total` is a string ("£102.60"); these four numerics reproduce it exactly.
-// areaCharges is deliberately left out — the API excludes it from `total` too.
-const shiftEarnings = (s) =>
-  (s.cashBookingsTotal || 0) + (s.rankJobsTotal || 0) +
-  (s.accountBookingsTotal || 0) + (s.loyaltyCardTotal || 0);
+// `total` is a string ("£102.60"). Cash + rank + account + loyalty *nearly*
+// reproduces it, but misses "< Premium App >" bookings — the API folds those
+// into `total` and `totalCost` without giving them a field or a counter of
+// their own (24 of 670 shifts on 2026-08-04, up to £46 each). So parse `total`.
+const money = (text) => Number(String(text || "").replace(/[^\d.-]/g, "")) || 0;
+const shiftEarnings = (s) => money(s.total);
 
 // Local midnight N days back, as UTC. The API takes Z but returns +01:00, so a
 // naive "T00:00:00Z" silently drops shifts started between midnight and 1am BST.
@@ -82,11 +85,17 @@ function summarise(shifts, longShiftHours) {
     const id = s.driver?.id ?? s.driverCallsign;
     let d = byDriver.get(id);
     if (!d) {
-      d = { seconds: 0, breakSeconds: 0, earnings: 0, open: false };
+      d = {
+        callsign: s.driverCallsign, name: s.driver?.fullName || "",
+        seconds: 0, breakSeconds: 0, cash: 0, account: 0,
+        earnings: 0, open: false
+      };
       byDriver.set(id, d);
     }
     d.seconds += durationToSeconds(s.shiftLength);
     d.breakSeconds += s.longBreakDurationInSeconds || 0;
+    d.cash += s.cashBookingsTotal || 0;
+    d.account += s.accountBookingsTotal || 0;
     d.earnings += shiftEarnings(s);
     d.open = d.open || open;
   }
@@ -102,11 +111,28 @@ function summarise(shifts, longShiftHours) {
   const netHours = Math.max(0, (t.seconds - t.breakSeconds) / 3600);
   const round2 = (n) => Math.round(n * 100) / 100;
 
-  return {
+  // Still on shift, and today's fragments add up past the threshold. `hours` is
+  // gross time signed on, so a driver who signed on and off six times shows one
+  // real day. perHour uses `total`, so in-app takings aren't dropped.
+  const longShifts = drivers
+    .filter((d) => d.open && d.seconds > longShiftHours * 3600)
+    .sort((a, b) => b.seconds - a.seconds)
+    .map((d) => ({
+      callsign: d.callsign,
+      name: (d.name || "").replace(/\s+/g, " ").trim(),   // API double-spaces names
+      hours: round2(d.seconds / 3600),
+      cash: round2(d.cash),
+      account: round2(d.account),
+      total: round2(d.earnings),
+      perHour: d.seconds ? round2(d.earnings / (d.seconds / 3600)) : 0,
+    }));
 
+  return {
     onShiftNow: drivers.filter((d) => d.open).length,
-    overLong: drivers.filter((d) => d.seconds > longShiftHours * 3600).length,
+    overLong: drivers.filter((d) => d.open && d.seconds > longShiftHours * 3600).length,
+    overLongToday: drivers.filter((d) => d.seconds > longShiftHours * 3600).length,
     longShiftHours,
+    longShifts,
     takings: round2(t.earnings),
     perHourGross: grossHours ? round2(t.earnings / grossHours) : 0,
     perHourNet: netHours ? round2(t.earnings / netHours) : 0,

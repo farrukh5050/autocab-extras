@@ -11,25 +11,24 @@
     "https://autocab-api.azure-api.net/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
-  "options_page": "options.html",
+  "options_page": "options/options.html",
   "action": {
     "default_title": "Autocab365 Extras"
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://*.autocab365.com/*"
-      ],
+      "matches": ["https://*.autocab365.com/*"],
       "js": [
-        "core.js",
+        "app/core.js",
         "features/show-booking.js",
         "features/quick-actions.js",
         "features/count-bookings.js",
         "features/long-shifts.js",
-        "management.js",
-        "dispatch.js"
+        "app/management.js",
+        "app/dispatch.js"
       ],
       "run_at": "document_idle"
     }

@@ -37,13 +37,13 @@ tabs therefore cost one API call, and the panel opens instantly.
 ## Architecture
 
 ```
-Chrome Extension                        Autocab API (Azure APIM)
-  core.js        registry + helpers       driver/v1/drivershifts/search
-  features/*.js  one file per feature   ▲
-  dispatch.js    toolbar + context menu │ Ocp-Apim-Subscription-Key
-  management.js  sidebar + settings page│
-  background.js  service worker ────────┘  (must be the SW — see below)
-  options.*      API key + thresholds
+Chrome Extension                          Autocab API (Azure APIM)
+  app/core.js        registry + helpers     driver/v1/drivershifts/search
+  app/dispatch.js    toolbar + ctx menu   ▲
+  app/management.js  sidebar + settings   │ Ocp-Apim-Subscription-Key
+  features/*.js      one file per feature │
+  background.js      service worker ──────┘  (must be the SW — see below)
+  options/           API key + thresholds
         ▲ installed & auto-updated via Web Store
         │
    GitHub (source + CI)                    ┄┄▶ Cloudflare Worker (planned)
@@ -60,23 +60,30 @@ never leaves `chrome.storage.local`.
 ```
 extension/
   manifest.json          # MV3; content scripts in load order
-  core.js                # window.AutocabExtras: registry, enabled store, DOM helpers
+  app/                   # the three files that build the UI
+    core.js              #   window.AutocabExtras: registry, enabled store, DOM helpers
+    dispatch.js          #   toolbar buttons, dropdown panels, context-menu items
+    management.js        #   sidebar "Extension" item + the settings page of tiles
   features/              # one file per feature, each self-registering
     show-booking.js
     quick-actions.js
     count-bookings.js
     long-shifts.js       #   the only one that talks to background.js
-  dispatch.js            # toolbar buttons, dropdown panels, context-menu items
-  management.js          # sidebar "Extension" item + the settings page of tiles
   background.js          # service worker: fetch, aggregate, cache, alarm refresh
-  options.html/.js       # API key, company id, long-shift threshold, test button
-index.html, driver-shift.js   # standalone scratch page (see Prototypes)
+  options/               # options.html + options.js — API key, company id, threshold
 ```
 
-Load order matters: `core.js` creates the namespace, each `features/*.js`
-registers into it, then `management.js` and `dispatch.js` render whatever was
-registered. Content scripts share one global scope, which is what lets them talk
-via `window.AutocabExtras`.
+Load order matters: `app/core.js` creates the namespace, each `features/*.js`
+registers into it, then `app/management.js` and `app/dispatch.js` render whatever
+was registered. Content scripts share one global scope, which is what lets them
+talk via `window.AutocabExtras`.
+
+**Content scripts cannot be ES modules.** Everything in `app/` and `features/` is
+injected as a classic script — one `export` and the whole chain dies at parse
+time. That shared global scope is precisely why `core.js` hangs its API off
+`window.AutocabExtras` instead of exporting it. The folders are organisation
+only; they are not a module tree. `background.js` is the exception: it's declared
+`"type": "module"`, so it alone can `import`.
 
 ## How it works
 
@@ -236,11 +243,14 @@ Autocab webhooks ──▶ Cloudflare tunnel ──▶ local Node server ──�
 Scratch work that proved something, kept for reference and not part of the built
 extension:
 
-- `index.html` + `driver-shift.js` (repo root) — a standalone page listing every
-  driver currently on shift in a table. Runs in a plain tab, prompts for the API
-  key and keeps it in `sessionStorage`. Useful for eyeballing raw API fields
-  without reloading the extension.
 - `~/Desktop/extension` (outside this repo) — the webhook server, job tracker and
   userscript described above. Note that `tracked-jobs.json` holds **real booking
   data including passenger names and phone numbers**, which is one reason it
   lives outside the repo; don't commit it here.
+
+A standalone `index.html` + `driver-shift.js` also lived at the repo root for a
+while — a plain page that listed every driver on shift, prompting for the API key
+and keeping it in `sessionStorage`. Handy for eyeballing raw API fields without
+reloading the extension. Removed during the folder restructure; it was never
+tracked in git, so rebuild it if that's useful again rather than looking for it
+in the history.

@@ -2,7 +2,6 @@
 // aggregates them per driver, and serves a small summary to the dispatch widget.
 // The API key never leaves storage. The summary names drivers, but only those
 // still on shift and past the long-shift threshold (see `longShifts`).
-"use strict";
 
 const API_URL = "https://autocab-api.azure-api.net/driver/v1/drivershifts/search";
 const CACHE_KEY = "shiftSummary";

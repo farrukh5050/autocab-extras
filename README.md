@@ -37,16 +37,18 @@ tabs therefore cost one API call, and the panel opens instantly.
 ## Architecture
 
 ```
-Chrome Extension                          Autocab API (Azure APIM)
-  app/core.js        registry + helpers     driver/v1/drivershifts/search
-  app/dispatch.js    toolbar + ctx menu   ▲
-  app/management.js  sidebar + settings   │ Ocp-Apim-Subscription-Key
-  features/*.js      one file per feature │
-  background.js      service worker ──────┘  (must be the SW — see below)
-  options/           API key + thresholds
+Chrome Extension                            Autocab API (Azure APIM)
+  app/core.js          registry + helpers     driver/v1/drivershifts/search
+  app/dispatch.js      toolbar + ctx menu   ▲
+  app/management.js    sidebar + settings   │ Ocp-Apim-Subscription-Key
+  features/*.js        one file per feature │
+  worker/service-      Chrome glue: storage │
+    worker.js          alarm, messaging     │
+  shared/shifts.js     fetch + aggregate ───┘  portable — no chrome.* in here
+  options/             API key + thresholds
         ▲ installed & auto-updated via Web Store
         │
-   GitHub (source + CI)                    ┄┄▶ Cloudflare Worker (planned)
+   GitHub (source + CI)          shared/shifts.js ┄┄▶ server (see Hosting)
 ```
 
 **Why the API call lives in the service worker:** the `Ocp-Apim-Subscription-Key`
@@ -54,6 +56,18 @@ header triggers a CORS preflight that the Azure gateway rejects from a page
 origin. A content script simply cannot make this call. The worker holds
 `host_permissions` and does it instead, so the key never enters the page and
 never leaves `chrome.storage.local`.
+
+**Why `shared/` exists.** That same fetch-and-aggregate logic has to run on a
+server eventually — the key shouldn't ship to every operator's browser, and
+webhooks need a public endpoint. So it's split out with **zero `chrome.*`
+references** and no platform APIs beyond `fetch`, which means it runs unchanged
+in the MV3 service worker, on Node, and on a Cloudflare Worker.
+`worker/service-worker.js` is the Chrome-only glue — `chrome.storage`,
+`chrome.alarms`, one `onMessage` listener — and never leaves the extension.
+`loadSummary()` is the seam: the single call both hosts make.
+
+Keep `shared/` honest. The moment it reads `chrome.storage` or assumes the host
+clock is UK time, it stops being portable and the split has bought nothing.
 
 ## Layout
 
@@ -68,8 +82,11 @@ extension/
     show-booking.js
     quick-actions.js
     count-bookings.js
-    long-shifts.js       #   the only one that talks to background.js
-  background.js          # service worker: fetch, aggregate, cache, alarm refresh
+    long-shifts.js       #   the only one that talks to the service worker
+  worker/
+    service-worker.js    # Chrome glue: settings, cache, alarm, onMessage
+  shared/
+    shifts.js            # portable: fetch + aggregate. NO chrome.* IN HERE
   options/               # options.html + options.js — API key, company id, threshold
 ```
 
@@ -82,8 +99,12 @@ talk via `window.AutocabExtras`.
 injected as a classic script — one `export` and the whole chain dies at parse
 time. That shared global scope is precisely why `core.js` hangs its API off
 `window.AutocabExtras` instead of exporting it. The folders are organisation
-only; they are not a module tree. `background.js` is the exception: it's declared
-`"type": "module"`, so it alone can `import`.
+only; they are not a module tree.
+
+`worker/` and `shared/` are the exception — the service worker is declared
+`"type": "module"` in the manifest, so those two files use real `import`/`export`.
+Extension *pages* (the options page) can also be modules if their `<script>` tag
+says so. Content scripts never can.
 
 ## How it works
 
@@ -212,11 +233,37 @@ Autocab webhooks ──▶ Cloudflare tunnel ──▶ local Node server ──�
   time each one fires.
 - Accepted ≠ arrived. If the alert should key off the driver *arriving* rather
   than accepting, that's a different start event and needs identifying.
-- `PickupDueTime` arrives as a naive local time (`"2026-08-05T12:15:00"`), which
-  is only correct while the server runs on UK time, same as dispatch. Needs
-  pinning down properly before it runs anywhere else.
+- `PickupDueTime` arrives as a naive local time (`"2026-08-05T12:15:00"`) with no
+  zone, so `new Date()` reads it in the host's zone — correct on a UK machine,
+  an hour out on any server, since both Cloudflare and Render run UTC. Resolve it
+  explicitly against `Europe/London`; `shared/shifts.js` already has the pattern.
 - Webhooks need a public endpoint, so this cannot be extension-only — it's the
   feature that forces the backend phase below.
+
+## Hosting
+
+Undecided. The shift-summary half doesn't need a server yet — it works in the
+service worker — so nothing is blocked. Webhooks are what force the issue, which
+makes this a decision for the alerts feature, not for the extension.
+
+- **Cloudflare Workers** — never sleeps, cheapest, and Durable Object alarms are
+  the right primitive for "wake me at `PickupDueTime + 5min` for this booking":
+  one timer per booking, deleting the 60s sweep and the `alerted` flag entirely.
+  Costs a rewrite of the prototype's HTTP layer and persistence.
+- **Render** — the prototype already *is* a Render app (long-running Node,
+  `setInterval`, plain `http.createServer`), so it deploys nearly as-is. But free
+  web services sleep after ~15 min idle, which for alerting means missed overdue
+  checks, lost state and cold-started webhooks. Correctness needs a paid
+  always-on instance plus Postgres.
+- **AWS** — ruled out. API Gateway + Lambda + DynamoDB + EventBridge + IAM is six
+  services and a learning curve to serve 192 drivers. Only reconsider if the firm
+  already runs on AWS with someone to support it.
+
+Whichever wins, `shared/shifts.js` moves untouched. Two things to remember when
+it runs under Node: add `extension/shared/package.json` containing
+`{ "type": "module" }` so the format doesn't depend on Node's version-specific
+syntax detection, and set the service's root directory to the repo root or the
+cross-directory import won't resolve.
 
 ### Phases
 
@@ -225,16 +272,18 @@ Autocab webhooks ──▶ Cloudflare tunnel ──▶ local Node server ──�
   persisted to `chrome.storage`.
 - **Phase 2 — driver-shifts data (done):** service worker fetch, per-driver
   aggregation, alarm refresh + cache, options page, the long-shifts panel.
-- **Phase 3 — backend:** Cloudflare Worker + D1 to receive Autocab webhooks and
-  hold state that can't live in a browser, plus Google token verification and a
+  Split into portable `shared/shifts.js` + Chrome-only `worker/service-worker.js`
+  so the aggregation can move to a server without being rewritten.
+- **Phase 3 — backend:** a server to receive Autocab webhooks and hold state that
+  can't live in a browser (see Hosting), plus Google token verification and a
   manual-approval gate so paid logic is served only to approved accounts.
-  (Swappable for Firebase or self-hosted SQL later — the extension only ever
-  talks to the Worker.)
+  The extension only ever talks to our own backend, never to a third party
+  directly, so the platform stays swappable.
 - **Phase 4 — late-pickup alerts in the extension:** port the prototype onto the
-  Worker; the extension subscribes and renders the banners.
+  backend; the extension subscribes and renders the banners.
 - **Phase 5 — write actions:** features that ask the API to *change* something
   rather than only read. Nothing writes to live dispatch until there's an audit
-  trail on the Worker.
+  trail on the backend.
 - **Phase 6 — CI + Web Store:** GitHub Actions, obfuscated build, unlisted
   publish, auto-update.
 

@@ -1,5 +1,8 @@
 // options.js — stores the API key and settings, and proves the API call works.
-"use strict";
+// Loaded as a module (see options.html), so it can share DEFAULTS with the
+// service worker rather than repeating the numbers. Extension pages may be
+// modules; content scripts may not.
+import { DEFAULTS } from "../shared/shifts.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -18,22 +21,22 @@ if (!chrome?.storage?.local) {
 
 chrome.storage.local.get(["apiKey", "companyId", "longShiftHours"], (d) => {
   $("apiKey").value = d.apiKey || "";
-  $("companyId").value = d.companyId ?? 1;
-  $("longShiftHours").value = d.longShiftHours ?? 10;
+  $("companyId").value = d.companyId ?? DEFAULTS.companyId;
+  $("longShiftHours").value = d.longShiftHours ?? DEFAULTS.longShiftHours;
 });
 
 $("save").addEventListener("click", () => {
   chrome.storage.local.set({
     apiKey: $("apiKey").value.trim(),
-    companyId: Number($("companyId").value) || 1,
-    longShiftHours: Number($("longShiftHours").value) || 10,
+    companyId: Number($("companyId").value) || DEFAULTS.companyId,
+    longShiftHours: Number($("longShiftHours").value) || DEFAULTS.longShiftHours,
   }, () => show("Saved."));
 });
 
 $("test").addEventListener("click", () => {
   show("Fetching…");
   chrome.runtime.sendMessage({ type: "getShiftSummary", force: true }, (s) => {
-    if (!s) { show("No response — is background.js registered?"); return; }
+    if (!s) { show("No response — is the service worker registered?"); return; }
     if (s.error) { show("Error: " + s.error); return; }
     show([
       `On shift now:     ${s.onShiftNow}`,

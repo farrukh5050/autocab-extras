@@ -98,7 +98,14 @@
     }
     for (const b of AE.buttons)
       for (const it of items(b)) {
+        // All three sub-apps share this menu, and each has several grids whose
+        // rows mean different things. `apps` narrows to the sub-app, `route` to
+        // the screen — an item acting on a row id MUST set `route`, or it will
+        // offer itself on a grid whose ids belong to something else entirely.
+        // Neither key set means everywhere.
         if (!it.contextMenu) continue;
+        if (it.apps && !it.apps.includes(AE.app)) continue;
+        if (it.route && !location.hash.includes(it.route)) continue;
         const el = template.cloneNode(true);
         el.classList.add(ITEM);
         const icon = el.querySelector("i");

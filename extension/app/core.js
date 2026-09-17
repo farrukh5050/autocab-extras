@@ -3,6 +3,12 @@
   "use strict";
   if (window.AutocabExtras) return;
 
+  // Which sub-app this tab is: "dispatch" | "jobprocessor" | "management".
+  // One content script serves all three, and they share the same grid and
+  // context-menu components, so features that only make sense in one of them
+  // must say so — see `apps` in dispatch.js.
+  const app = location.hostname.split(".")[0];
+
   let enabled = {};                     // id -> bool; a missing key means ON
   const listeners = [];
   const notify = () => listeners.forEach((fn) => fn());
@@ -40,6 +46,7 @@
   }
 
   window.AutocabExtras = {
+    app,
     buttons: [],
     registerButton(cfg) { this.buttons.push(cfg); },
     showToast,

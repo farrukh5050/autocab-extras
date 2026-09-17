@@ -27,6 +27,7 @@
         "features/quick-actions.js",
         "features/count-bookings.js",
         "features/long-shifts.js",
+        "features/email-driver-sheet.js",
         "app/management.js",
         "app/dispatch.js"
       ],

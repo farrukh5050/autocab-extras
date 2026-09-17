@@ -24,6 +24,7 @@
         label: "Show selected booking",
         icon: "fa-receipt",
         contextMenu: true,
+        apps: ["dispatch"],
         run: showBooking,
       },
     ],

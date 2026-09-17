@@ -27,6 +27,7 @@
                 label: "Copy booking details",
                 icon: "fa-copy",
                 contextMenu: true,
+                apps: ["dispatch"],
                 run: copyBooking,
             },
             {
@@ -34,6 +35,7 @@
                 label: "Show zone of selection",
                 icon: "fa-map-marker-alt",
                 contextMenu: true,
+                apps: ["dispatch"],
                 run: showZone,
             },
         ],

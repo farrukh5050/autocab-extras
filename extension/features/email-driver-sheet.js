@@ -6,18 +6,17 @@
 // `printDriverSheet:false` is the one deliberate difference — the app sends
 // true, which is what raises its save-a-copy prompt. We only want the email.
 //
-// This WRITES to the live accounts ledger and mails a real driver, with no
-// confirmation by design. The guards are therefore against the accident, not
-// the intent: an in-flight lock and a per-driver cooldown, so a double-click,
-// a slow response or a jumpy hand cannot send twice.
+// This WRITES to the live accounts ledger and mails a real driver. The confirm
+// dialog is the gate against the wrong row; the in-flight lock is the guard
+// against a double-click landing two sends. Repeat sends are deliberate and
+// allowed — no cooldown.
 (() => {
   "use strict";
   const AE = window.AutocabExtras;
 
   const PATH = "/api/ghost/v1/accounts/driveraccounts/{id}/draftprocessdriver";
-  const COOLDOWN_MS = 30000;
-  const sentAt = new Map();            // driverId -> ms of last successful send
   let inFlight = false;
+  const DIALOG = "ae-driver-sheet-dialog";
 
   // The API host carries a per-tenant hash (ghost-main-<hash>.ghostapi.app:29003)
   // and the session token is a JWT the app parks in localStorage. Both are found
@@ -74,16 +73,97 @@
     return [d.callsign, d.name, d.balance].filter(Boolean).join(" · ");
   }
 
+  // Read-only on purpose: this is a confirm step, not an editor. The address
+  // shown is the one the API will actually mail — draftprocessdriver takes no
+  // recipient, it uses whatever is on the driver record — so an editable box
+  // here would let an operator "fix" an address that the send then ignores.
+  // Wrong address = fix it on the driver in Autocab.
+  AE.css("ae-driver-sheet-css", `
+    #${DIALOG} { position:fixed; inset:0; z-index:2147483646; display:flex;
+      align-items:center; justify-content:center; background:rgba(0,0,0,.45); }
+    #${DIALOG} .ae-box { min-width:380px; background:#2b2b2b; color:#fff;
+      font:14px/1.4 system-ui,sans-serif; border-radius:8px; padding:16px;
+      box-shadow:0 6px 24px rgba(0,0,0,.5); }
+    #${DIALOG} h4 { margin:0 0 10px; color:#fff; background:none;
+      font:400 11px/1.4 system-ui,sans-serif; letter-spacing:.08em; opacity:.75; }
+    #${DIALOG} .ae-who { margin-bottom:10px; }
+    #${DIALOG} input { width:100%; box-sizing:border-box; padding:7px 9px;
+      border:1px solid rgba(255,255,255,.2); border-radius:4px;
+      background:#1f1f1f; color:#fff; font:inherit; }
+    #${DIALOG} .ae-btns { margin-top:14px; display:flex; gap:8px;
+      justify-content:flex-end; }
+    #${DIALOG} button { padding:7px 14px; border:0; border-radius:4px;
+      font:inherit; cursor:pointer; background:#4a4a4a; color:#fff; }
+    #${DIALOG} button.ae-go { background:#2e7d32; }
+    #${DIALOG} button[disabled] { opacity:.5; cursor:default; }
+  `);
+
+  function closeDialog() {
+    document.getElementById(DIALOG)?.remove();
+    document.removeEventListener("keydown", onEsc);
+  }
+  const onEsc = (e) => { if (e.key === "Escape") closeDialog(); };
+
+  // A content script outlives its extension: after a reload or auto-update
+  // chrome.runtime is gone in tabs already open, which for an all-day dispatch
+  // tab is the normal state, not an edge case.
+  const orphaned = () => typeof chrome === "undefined" || !chrome.runtime?.id;
+
+  function getDriver(id) {
+    return new Promise((resolve) => {
+      if (orphaned()) return resolve({ error: "Extension was updated — refresh this page." });
+      try {
+        chrome.runtime.sendMessage({ type: "getDriver", id }, (r) =>
+          // Reading lastError is what marks it handled.
+          resolve(r || { error: chrome.runtime.lastError?.message || "No response from the extension." }));
+      } catch (e) {
+        resolve({ error: `${e.message || e} — refresh this page.` });
+      }
+    });
+  }
+
+  function openDialog(d, email) {
+    closeDialog();
+    const wrap = document.createElement("div");
+    wrap.id = DIALOG;
+    wrap.innerHTML = `
+      <div class="ae-box">
+        <h4>EMAIL DRIVER SHEET</h4>
+        <div class="ae-who"></div>
+        <input type="email" readonly />
+        <div class="ae-btns">
+          <button class="ae-cancel">Cancel</button>
+          <button class="ae-go">Send Email</button>
+        </div>
+      </div>`;
+    wrap.querySelector(".ae-who").textContent = label(d);
+    wrap.querySelector("input").value = email;
+    wrap.querySelector(".ae-cancel").onclick = closeDialog;
+    const go = wrap.querySelector(".ae-go");
+    go.onclick = () => { go.disabled = true; closeDialog(); send(d); };
+    wrap.onclick = (e) => { if (e.target === wrap) closeDialog(); };
+    document.body.appendChild(wrap);
+    go.focus();
+    document.addEventListener("keydown", onEsc);
+  }
+
   async function emailSheet() {
     const d = selectedDriver();
     if (!d) { AE.showToast("Select a driver row first"); return; }
+    if (inFlight) return;
 
-    if (inFlight) return;                       // a second click while one is open
-    const last = sentAt.get(d.id);
-    if (last && Date.now() - last < COOLDOWN_MS) {
-      AE.showToast(`Already emailed ${d.callsign} moments ago — ignored`);
-      return;
-    }
+    const r = await getDriver(d.id);
+    if (r.error) { AE.showToast(r.error); return; }
+    if (!r.email) { AE.showToast(`No email address on ${d.callsign} — add one in Autocab`); return; }
+    openDialog(d, r.email);
+  }
+
+
+  async function send(d) {
+    // Re-checked here, not just at the dialog: the guards exist for the double
+    // send, and the gap between opening the dialog and clicking Send is exactly
+    // where a second one gets in.
+    if (inFlight) return;
 
     const host = apiHost();
     const token = authToken();
@@ -109,7 +189,6 @@
         }),
       });
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      sentAt.set(d.id, Date.now());
       // The toast is the only feedback there is, so it names who was mailed —
       // that is what makes a wrong-row send visible straight away.
       AE.showToast(`Sheet emailed — ${label(d)}`);
@@ -135,7 +214,7 @@
         icon: "fa-envelope",
         contextMenu: true,
         apps: ["jobprocessor"],
-        route: "driver-accounts",      // NOT the docket, customer or sheet-history grids
+        route: "driver-accounts",      // Keytword to look for so this menue item can be shown
         run: emailSheet,
       },
     ],

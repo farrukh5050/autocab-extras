@@ -53,3 +53,28 @@ chrome.alarms.create(ALARM, { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((a) => { if (a.name === ALARM) refresh(); });
 chrome.runtime.onInstalled.addListener(refresh);
 chrome.runtime.onStartup.addListener(refresh);
+
+// The driver record lives on the public Autocab API, not the ghost API the sheet
+// itself is posted to — different host, different auth (subscription key, not the
+// page's JWT), and a content script's fetch carries the page's origin. So it has
+// to run here, where the host permission and the key both are.
+const DRIVER_URL = "https://autocab-api.azure-api.net/driver/v1/drivers/";
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type !== "getDriver") return;
+  (async () => {
+    const { apiKey } = await settings();
+    if (!apiKey) return sendResponse({ error: "No API key set — add one in the extension options." });
+    try {
+      const res = await fetch(DRIVER_URL + encodeURIComponent(msg.id), {
+        headers: { "Ocp-Apim-Subscription-Key": apiKey },
+      });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const d = await res.json();
+      sendResponse({ email: d.email || "", fullName: d.fullName || "" });
+    } catch (e) {
+      sendResponse({ error: String(e.message || e) });
+    }
+  })();
+  return true;                    // keeps the channel open for the async reply
+});
